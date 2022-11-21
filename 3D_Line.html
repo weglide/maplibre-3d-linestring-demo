@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Add a custom style layer</title>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+<script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+<style>
+	body { margin: 0; padding: 0; }
+	#map { position: absolute; top: 0; bottom: 0; width: 100%; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+    var map = (window.map = new maplibregl.Map({
+        container: 'map',
+        zoom: 9,
+        center: [0.8, 50],
+        maxPitch: 80,
+        style:
+            'https://api.maptiler.com/maps/streets/style.json?key=get_your_own_OpIi9ZULNHzrESv6T2vL',
+        antialias: true // create the gl context with MSAA antialiasing, so custom layers are antialiased
+    }));
+
+    const global_data = {
+    edges: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    coords: []
+    }
+
+    // create a custom style layer to implement the WebGL content
+    var highlightLayer = {
+        id: 'highlight',
+        type: 'custom',
+        renderingMode: '3d',
+
+        // method called when the layer is added to the map
+        // https://maplibre.org/maplibre-gl-js-docs/api/properties/#styleimageinterface#onadd
+        onAdd: function (map, gl) {
+            // create GLSL source for vertex shader
+            var vertexSource =
+                '' +
+                'uniform mat4 u_matrix;' +
+                'uniform mat4 fixquad;' +
+                'attribute float edge;' +
+                '' +
+                'vec3 plane_right(vec3 n){' +
+                '    float x = 0.0;' +
+                '    float y = 0.0;' +
+                '    float z = 0.0;' +
+                '' +
+                '    if (n[0] == 0.0) {' +
+                '        x = 1.0;' +
+                '    } else {' +
+                '        x = (-n[1]) / n[0];' +
+                '    }' +
+                '    if (x == 0.0) {' +
+                '        y = 1.0;' +
+                '    } else {' +
+                '        y = (-x * n[0]) / n[1];' +
+                '    }' +
+                '' +
+                '    vec3 vector = normalize(vec3(x, y, z));' +
+                '' +
+                '    if (cross(n, vector)[2] > 0.0) {' +
+                '        return -vector;' +
+                '    } else {' +
+                '        return vector;' +
+                '    }' +
+                '}' +
+                '' +
+                'vec3 plane_up(vec3 n, vec3 r){' +
+                '    vec3 vector = -cross(n, r);' +
+                '    return vector;' +
+                '}' +
+                '' +
+                'void main() {' +
+                '    int iedge = int(edge);' +
+                '' +
+                '    vec3 pre = vec3(fixquad[0][0], fixquad[0][1], fixquad[0][2]);' +
+                '    vec3 act = vec3(fixquad[1][0], fixquad[1][1], fixquad[1][2]);' +
+                '    vec3 post = vec3(fixquad[2][0], fixquad[2][1], fixquad[2][2]);' +
+                '    vec3 postpost = vec3(fixquad[3][0], fixquad[3][1], fixquad[3][2]);' +
+                '' +
+                '    vec3 a = act - pre;' + 
+                '    vec3 b = post - act;' +
+                '    vec3 c = postpost - post;' +
+                '' +
+                '    vec3 act_normal = normalize(normalize(a) + normalize(b));' +
+                '    vec3 next_normal = normalize(normalize(b) + normalize(c));' +
+                '' +
+                '    vec3 act_right = plane_right(act_normal);' +
+                '    vec3 next_right = plane_right(next_normal);' +
+                '' +
+                '    vec3 act_up = plane_up(act_normal, act_right);' +
+                '    vec3 next_up = plane_up(next_normal, next_right);' +
+                '' +
+                '    vec3 pos = vec3(0.0, 0.0, 0.0);' +
+                '    vec2 size = vec2(0.00001, 0.000005);' +
+                '    if (iedge == 0 || iedge == 8) {' +
+                '        pos = act - size[1] * act_up - size[0] * act_right;' +
+                '    } else if (iedge == 2) {' +
+                '        pos = act + size[1] * act_up - size[0] * act_right;' +
+                '    } else if (iedge == 3) {' +
+                '        pos = post + size[1] * next_up - size[0] * next_right;' +
+                '    } else if (iedge == 4) {' +
+                '        pos = act + size[1] * act_up + size[0] * act_right;' +
+                '    } else if (iedge == 5) {' +
+                '        pos = post + size[1] * next_up + size[0] * next_right;' +
+                '    } else if (iedge == 6) {' +
+                '        pos = act - size[1] * act_up + size[0] * act_right;' +
+                '    } else if (iedge == 7) {' +
+                '        pos = post - size[1] * next_up + size[0] * next_right;' +
+                '    } else {' +
+                '        pos = post - size[1] * next_up - size[0] * next_right;' +
+                '    }' +
+                '' +
+                '    gl_Position = u_matrix * vec4(pos[0], pos[1], pos[2], 1.0);' +
+                '}';
+
+            // create GLSL source for fragment shader
+            var fragmentSource =
+                '' +
+                'void main() {' +
+                '    gl_FragColor = vec4(0.8, 0.2, 0.0, 1.0);' +
+                '}';
+
+            // create a vertex shader
+            var vertexShader = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vertexShader, vertexSource);
+            gl.compileShader(vertexShader);
+
+            // create a fragment shader
+            var fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fragmentShader, fragmentSource);
+            gl.compileShader(fragmentShader);
+
+            // link the two shaders into a WebGL program
+            this.program = gl.createProgram();
+            gl.attachShader(this.program, vertexShader);
+            gl.attachShader(this.program, fragmentShader);
+            gl.linkProgram(this.program);
+
+            this.fixquad = gl.getUniformLocation(this.program, 'fixquad');
+            this.edge = gl.getAttribLocation(this.program, 'edge');
+
+            // 3D-coordinates to display [lng, lat, altitude]
+            global_data.coords = [
+                [0.5, 50, 500],
+                [0.6, 50.1, 4000],
+                [0.6, 50.2, 900],
+                [0.7, 50.2, 0],
+                [0.8, 50.2, 2000],
+                [0.8, 50.0, 2000],
+                [0.81, 50.0, 2000],
+                [0.82, 50.1, 0],
+                [0.9, 50.15, 1000],
+                [1.0, 50.18, 4000],
+                [1.0, 50.19, 4000],
+                [1.0, 50.2, 2000],
+                [1.0, 50.25, 3000],
+                [1.0, 50.3, 0]
+            ];
+
+            // transform coordinates to mercator
+            for (let i = 0; i < global_data.coords.length; i++){
+                let merc_coords = maplibregl.MercatorCoordinate.fromLngLat({
+                    lng: global_data.coords[i][0],
+                    lat: global_data.coords[i][1],
+                }, global_data.coords[i][2])
+                global_data.coords[i] = [merc_coords.x, merc_coords.y, merc_coords.z, 0.0];
+            }
+
+            // create and initialize a WebGLBuffers to store vertex and color data
+            this.edgebuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.edgebuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(global_data.edges), gl.STATIC_DRAW);
+        },
+
+        // method fired on each animation frame
+        // https://maplibre.org/maplibre-gl-js-docs/api/map/#map.event:render
+        render: function (gl, matrix) {
+            gl.useProgram(this.program);
+            gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_matrix'), false, matrix);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.edgebuffer);
+            gl.enableVertexAttribArray(this.edge);
+            gl.vertexAttribPointer(this.edge, 1, gl.FLOAT, false, 0, 0);
+
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+            // build track segments
+            for (let i = 1; i < global_data.coords.length - 2; i++) {
+                let preseg = global_data.coords[i - 1]
+                let midseg = global_data.coords[i]
+                let postseg = global_data.coords[i + 1]
+                let postpostseg = global_data.coords[i + 2]
+
+                const trackSegment = [].concat(preseg, midseg, postseg, postpostseg);
+
+                // select 4x4 data matrix for each gps-fix
+                gl.uniformMatrix4fv(this.fixquad, false, trackSegment)
+
+                // draw separate quads (two triangles per prism face, 4 faces -> 10 vertices as strip)
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 10)
+                }
+        }
+    };
+
+    // add the custom style layer to the map
+    map.on('load', function () {
+        map.addLayer(highlightLayer, 'building');
+    });
+</script>
+
+</body>
+</html>
